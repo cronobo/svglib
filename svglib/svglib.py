@@ -38,7 +38,7 @@ from reportlab.graphics.shapes import (
     Polygon, Rect, String,
 )
 from reportlab.lib import colors
-from reportlab.lib.units import pica, toLength
+from reportlab.lib.units import pica, toLength, mm
 from lxml import etree
 
 from .utils import (
@@ -284,9 +284,11 @@ class Svg2RlgAttributeConverter(AttributeConverter):
             return float(text[:-2]) * em_base
         elif text.endswith("px"):
             return float(text[:-2])
+        elif text.endswith("mm"):
+            return float(text[:-2]) * mm
 
         if "ex" in text:
-            logger.warn("Ignoring unit ex")
+            logger.warning("Ignoring unit ex")
             text = text.replace("ex", '')
 
         text = text.strip()
@@ -424,17 +426,19 @@ class SvgRenderer:
         self.handled_shapes = self.shape_converter.get_handled_shapes()
         self.definitions = {}
         self.waiting_use_nodes = defaultdict(list)
+        self.width = 0
+        self.height = 0
 
     def render(self, svg_node):
         node = NodeTracker(svg_node)
         main_group = self.renderSvg(node, outermost=True)
         for xlink in self.waiting_use_nodes.keys():
             logger.debug("Ignoring unavailable object width ID '%s'." % xlink)
-
-        view_box = self.get_box(node, default_box=True)
-        main_group.scale(1, -1)
-        main_group.translate(0 - view_box.x, -view_box.height - view_box.y)
-        drawing = Drawing(view_box.width, view_box.height)
+        scale_x = self.width / self.box.width
+        scale_y = self.height / self.box.height
+        main_group.scale(scale_x, -scale_y)
+        main_group.translate(0 - self.box.x, -self.box.height - self.box.y)
+        drawing = Drawing(self.width, self.height)
         drawing.add(main_group)
         return drawing
 
@@ -540,6 +544,16 @@ class SvgRenderer:
         _saved_preserve_space = self.shape_converter.preserve_space
         self.shape_converter.preserve_space = getAttr("{%s}space" % XML_NS) == 'preserve'
 
+        width, height = map(getAttr, ("width", "height"))
+        width, height = map(self.attrConverter.convertLength, (width, height))
+        self.width = width
+        self.height = height
+        viewBox = getAttr("viewBox")
+        if viewBox:
+            viewBox = self.attrConverter.convertLengthList(viewBox)
+            self.box = Box(*viewBox)
+        else:
+            self.box = Box(0, 0, width, height)
         group = Group()
         for child in node.getchildren():
             self.renderNode(child, group)
